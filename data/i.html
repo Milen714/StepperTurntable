@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Stepper Motor</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+ 
+async function fetchPosition(){
+  try {
+    const response = await fetch('/position');
+    getPercentage();
+    if (!response.ok) {
+      throw new Error("Failed to fetch position");
+    }
+    const jsonData = await response.json();
+    if (jsonData.success && jsonData.data) {
+      const position = jsonData.data.position;
+      document.getElementById("positionDisplay").textContent = "Position: " + position;
+      document.getElementById("moveToPositionSlider").value = position;
+      document.getElementById("hiddenCurrentPosition").value = position;
+    } else {
+      throw new Error(jsonData.message || "Unknown error");
+    }
+  } catch (error) {
+    console.error("Error fetching position:", error);
+    document.getElementById("positionDisplay").textContent = "Error fetching position";
+  }
+}
+
+window.addEventListener("DOMContentLoaded", () => {
+  fetchPosition(); // Set slider on load
+   // Set initial background gradient
+
+  document.querySelector("#moveForm").addEventListener("submit", async function (e) {
+    e.preventDefault(); // Prevent page reload
+    
+    const sliderValue = parseInt(document.getElementById("moveToPositionSlider").value);
+    const currentValue = parseInt(document.getElementById("hiddenCurrentPosition").value);
+
+    let direction = "CW";
+    let steps = 0;
+    
+
+    if (sliderValue < currentValue) {
+      direction = "CCW";
+      steps = currentValue - sliderValue;
+    } else {
+      direction = "CW";
+      steps = sliderValue - currentValue;
+    }
+
+    // Optional: update test displays
+    document.getElementById("DirTest").textContent = "Direction: " + direction;
+    document.getElementById("StepsTest").textContent = "Steps: " + steps;
+
+    // Send JSON POST request
+    try {
+      const response = await fetch("/", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          direction: direction,
+          steps: steps
+        })
+      });
+
+      const result = await response.json();
+      if (result.success) {
+        console.log("Motor move successful:", result.message);
+      } else {
+        console.error("Motor move failed:", result.message);
+      }
+    } catch (error) {
+      console.error("Error sending motor command:", error);
+    }
+  });
+
+  document.getElementById("moveToPositionSlider").addEventListener("change", getPercentage);
+});
+
+function getPercentage() {
+  const slider = document.getElementById("moveToPositionSlider");
+  let value = parseInt(slider.value);
+  let max = parseInt(slider.max);
+  let percentage = Math.round((value / max) * 100);
+  document.querySelector("body").style.background = "linear-gradient(0deg, #9198e5 " + percentage + "%, #FDB813 " + (percentage + 20) + "%)";
+  document.getElementById("sliderPercentage").textContent = percentage + "%";
+}
+
+
+// Precise controls form handler
+document.addEventListener("DOMContentLoaded", () => {
+  const preciseForm = document.getElementById("preciseForm");
+  if (preciseForm) {
+    preciseForm.addEventListener("submit", async function (e) {
+      e.preventDefault();
+      
+      const direction = document.querySelector('input[name="direction"]:checked').value;
+      const steps = parseInt(document.getElementById("preciseSteps").value);
+      
+      if (isNaN(steps) || steps <= 0) {
+        console.error("Invalid steps value");
+        return;
+      }
+      
+      try {
+        const response = await fetch("/", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            direction: direction,
+            steps: steps
+          })
+        });
+        
+        const result = await response.json();
+        if (result.success) {
+          console.log("Precise move successful:", result.message);
+          document.getElementById("preciseSteps").value = "";
+        } else {
+          console.error("Precise move failed:", result.message);
+        }
+      } catch (error) {
+        console.error("Error sending precise command:", error);
+      }
+    });
+  }
+});
+
+setInterval(fetchPosition, 5000); // Fetch position every 5 seconds
+
+  </script>
+</head>
+<body>
+  <h1>Blinds Controls</h1>
+  <button onclick="getPercentage()" id="show">Precise Controls</button>
+  <div id="motorPreciseControl">
+    <form id="preciseForm">
+      <input type="radio" name="direction" value="CW" checked>
+      <label for="CW">Down</label>
+      <input type="radio" name="direction" value="CCW">
+      <label for="CCW">Up</label><br><br>
+      <label for="preciseSteps">Number of steps:</label>
+      <input type="number" name="steps" id="preciseSteps">
+      <input type="submit" value="GO!">
+    </form>
+  </div>
+  <div>
+    <button onclick="fetchPosition()">Get Position</button>
+    <div id="positionDisplay">Position: loading...</div>
+    <input onload="fetchPosition()" id="hiddenCurrentPosition" type="hidden" name="steps" value="0">
+    <div class="slider-container">
+      <form id="moveForm">
+        <span id="sliderPercentage">0%</span>
+        <input type="range" min="0" max="10000" value="0" class="slider" id="moveToPositionSlider">
+        <button class="Move" type="submit">Move</button>
+      </form>
+      <div id="DirTest">Direction: -</div>
+      <div id="StepsTest">Steps: -</div>
+    </div>
+</div>
+</body>
+</html>
+
