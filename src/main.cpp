@@ -16,6 +16,14 @@ AccelStepper stepper(MOTOR_INTERFACE_TYPE, STEP_PIN, DIR_PIN);
 bool directionCW = true;
 int motorSpeed = 500;
 
+#define STEPS_PER_REVOLUTION 200
+enum TurntableMode
+{
+  TURNTABLE_CONTINUOUS,
+  TURNTABLE_RELATIVE_MOVE
+};
+TurntableMode turntableMode = TURNTABLE_CONTINUOUS;
+
 // WiFi credentials
 #include "secrets.h"
 
@@ -26,6 +34,50 @@ const char *password = WIFI_PASSWORD;
 AsyncWebServer server(80);
 
 bool motorEnabled = false;
+bool wifiWasConnected = false;
+unsigned long lastWifiAttempt = 0;
+const unsigned long wifiRetryInterval = 10000;
+
+void startWifiConnection()
+{
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(true);
+  WiFi.begin(ssid, password);
+  lastWifiAttempt = millis();
+  Serial.println("Connecting to WiFi...");
+}
+
+void handleWifiConnection()
+{
+  bool connected = WiFi.status() == WL_CONNECTED;
+
+  if (connected)
+  {
+    if (!wifiWasConnected)
+    {
+      Serial.println("Connected to WiFi");
+      Serial.println(WiFi.localIP());
+      wifiWasConnected = true;
+    }
+    return;
+  }
+
+  if (wifiWasConnected)
+  {
+    Serial.println("WiFi connection lost");
+    wifiWasConnected = false;
+  }
+
+  if (millis() - lastWifiAttempt >= wifiRetryInterval)
+  {
+    Serial.println("Retrying WiFi connection...");
+    WiFi.disconnect(false, false);
+    WiFi.begin(ssid, password);
+    lastWifiAttempt = millis();
+  }
+}
 
 // JSON Helper Functions
 void sendJsonSuccess(AsyncWebServerRequest *request, const char *message, JsonObject &data)
@@ -68,10 +120,24 @@ void disableMotor()
 
 void runTurntable()
 {
-  if (motorEnabled)
+  if (!motorEnabled)
+  {
+    return;
+  }
+
+  if (turntableMode == TURNTABLE_CONTINUOUS)
   {
     stepper.setSpeed(directionCW ? motorSpeed : -motorSpeed);
     stepper.runSpeed();
+  }
+  else
+  {
+    stepper.run();
+    if (!stepper.isRunning())
+    {
+      disableMotor();
+      turntableMode = TURNTABLE_CONTINUOUS;
+    }
   }
 }
 
@@ -103,18 +169,13 @@ void setup()
     }
   }
 
-  // WiFi connection
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED)
-  {
-    delay(1000);
-    Serial.println("Connecting to WiFi...");
-  }
-  Serial.println("Connected to WiFi");
-  Serial.println(WiFi.localIP());
+  // WiFi connection is handled in loop() so setup and motor control
+  // remain responsive while the network is unavailable.
+  startWifiConnection();
 
   // Stepper configuration
   stepper.setMaxSpeed(2000);
+  stepper.setAcceleration(300);
   stepper.setSpeed(0);
   pinMode(EN_PIN, OUTPUT);
   disableMotor();
@@ -161,6 +222,7 @@ void setup()
 
       directionCW = (direction == "CW");
       motorSpeed = speed;
+      turntableMode = TURNTABLE_CONTINUOUS;
 
       if (enabled && motorSpeed > 0)
       {
@@ -178,14 +240,93 @@ void setup()
       dataObj["direction"] = directionCW ? "CW" : "CCW";
       dataObj["speed"] = motorSpeed;
       sendJsonSuccess(request, motorEnabled ? "Turntable started" : "Turntable stopped", dataObj); });
+
+  server.on("/move/degrees", HTTP_POST, [](AsyncWebServerRequest *request) {}, nullptr, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
+            {
+      if (index != 0)
+      {
+        return;
+      }
+
+      JsonDocument doc;
+      DeserializationError error = deserializeJson(doc, data, len);
+      if (error)
+      {
+        sendJsonError(request, "Invalid JSON data");
+        return;
+      }
+
+      if (doc["degrees"].isNull())
+      {
+        sendJsonError(request, "Missing degrees");
+        return;
+      }
+
+      float degrees = doc["degrees"].as<float>();
+      if (!isfinite(degrees) || degrees <= 0.0 || degrees > 360.0)
+      {
+        sendJsonError(request, "Degrees must be greater than 0 and no more than 360");
+        return;
+      }
+
+      if (!doc["direction"].isNull())
+      {
+        String direction = doc["direction"].as<String>();
+        if (direction != "CW" && direction != "CCW")
+        {
+          sendJsonError(request, "Direction must be CW or CCW");
+          return;
+        }
+        directionCW = (direction == "CW");
+      }
+
+      if (!doc["speed"].isNull())
+      {
+        int speed = doc["speed"].as<int>();
+        if (speed < 1 || speed > 2000)
+        {
+          sendJsonError(request, "Speed must be between 1 and 2000");
+          return;
+        }
+        motorSpeed = speed;
+      }
+
+      long steps = lround(degrees * STEPS_PER_REVOLUTION / 360.0);
+      if (steps < 1)
+      {
+        sendJsonError(request, "Degrees are too small for the configured step resolution");
+        return;
+      }
+
+      stepper.setMaxSpeed(max(motorSpeed, 1));
+      stepper.move(directionCW ? steps : -steps);
+      enableMotor();
+      turntableMode = TURNTABLE_RELATIVE_MOVE;
+
+      JsonDocument responseDoc;
+      JsonObject dataObj = responseDoc.createNestedObject("data");
+      dataObj["degrees"] = degrees;
+      dataObj["steps"] = steps;
+      dataObj["direction"] = directionCW ? "CW" : "CCW";
+      dataObj["speed"] = motorSpeed;
+      dataObj["enabled"] = motorEnabled;
+      dataObj["moving"] = motorEnabled;
+      dataObj["mode"] = "relative_move";
+      sendJsonSuccess(request, "Relative degree movement started", dataObj); });
+
   server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request)
             {
     JsonDocument doc;
     JsonObject dataObj = doc.createNestedObject("data");
+    bool isMoving = turntableMode == TURNTABLE_RELATIVE_MOVE
+                        ? motorEnabled && stepper.isRunning()
+                        : motorEnabled;
     dataObj["enabled"] = motorEnabled;
-    dataObj["moving"] = motorEnabled;
+    dataObj["moving"] = isMoving;
     dataObj["direction"] = directionCW ? "CW" : "CCW";
     dataObj["speed"] = motorSpeed;
+    dataObj["mode"] = turntableMode == TURNTABLE_RELATIVE_MOVE ? "relative_move" : "continuous";
+    dataObj["positionDegrees"] = stepper.currentPosition() * 360.0 / STEPS_PER_REVOLUTION;
     sendJsonSuccess(request, "Status retrieved", dataObj); });
   // Static files
   server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html");
@@ -196,5 +337,6 @@ void setup()
 
 void loop()
 {
+  handleWifiConnection();
   runTurntable();
 }

@@ -46,6 +46,34 @@ function updateStatus(data) {
   });
 }
 
+async function moveDegrees() {
+  const degreesInput = document.getElementById('degrees');
+  const speedSlider = document.getElementById('speed');
+  const degrees = Number(degreesInput.value);
+  const speed = Math.round(Number(speedSlider.value) * 20);
+
+  if (!Number.isFinite(degrees) || degrees <= 0 || degrees > 360) {
+    document.getElementById('status-text').textContent = 'Degrees must be between 1.8 and 360';
+    return;
+  }
+
+  try {
+    const response = await fetch('/move/degrees', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ degrees, direction: state.direction, speed })
+    });
+
+    const result = await response.json();
+    if (!result.success) {
+      throw new Error(result.message || 'Movement request failed');
+    }
+    document.getElementById('status-text').textContent = 'Moving ' + degrees + '° ' + state.direction;
+  } catch (error) {
+    document.getElementById('status-text').textContent = 'Error: ' + error.message;
+  }
+}
+
 async function refreshStatus() {
   try {
     const response = await fetch('/status');
@@ -93,6 +121,8 @@ window.addEventListener('DOMContentLoaded', () => {
       sendControl();
     });
   });
+
+  document.getElementById('move-degrees').addEventListener('click', moveDegrees);
 
   refreshStatus();
   setInterval(refreshStatus, 3000);

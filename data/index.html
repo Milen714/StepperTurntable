@@ -54,6 +54,14 @@
       </div>
       <input type="range" id="speed" min="1" max="100" value="50">
     </div>
+
+    <div class="control-row">
+      <label for="degrees">Relative movement</label>
+      <div style="display:grid;grid-template-columns:1fr auto;gap:10px">
+        <input type="number" id="degrees" min="1.8" max="360" step="1.8" value="90" style="min-height:48px;padding:0 12px;border:1px solid #d7dbe2;border-radius:12px">
+        <button type="button" id="move-degrees" style="min-height:48px;padding:0 18px;border:0;border-radius:12px;background:#4f46e5;color:white;font-weight:700">Move °</button>
+      </div>
+    </div>
   </main>
   <script src="turntable-control.js"></script>
 </body>
